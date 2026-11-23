@@ -1345,6 +1345,7 @@ function resetNetworkHistoryFilters() {
     setHistoryFilterMessage("");
 
     loadNetworkHistory("all");
+   updateHistoryChart([], "all");
 }
 
 async function loadNetworkHistory(range = null) {
@@ -2880,3 +2881,246 @@ if (typeof module !== "undefined" && module.exports) {
 /* =========================================================
    END OF SCRIPT
    ========================================================= */
+
+// ============================================================
+// LOCAL HISTORY RETENTION & DELETE CONTROLS
+// ============================================================
+
+const selectedHistoryIds = new Set();
+let pendingDeleteMode = null; // "selected" | "all"
+
+function updateSelectedHistoryUI() {
+    const countEl = $("selectedHistoryCount");
+    const deleteSelectedBtn = $("deleteSelectedHistory");
+    const selectAllCheckbox = $("selectAllHistoryRecords");
+
+    const count = selectedHistoryIds.size;
+    if (countEl) countEl.textContent = String(count);
+    if (deleteSelectedBtn) deleteSelectedBtn.disabled = count === 0;
+
+    if (selectAllCheckbox) {
+        const selectableItems = sessionTests.filter(
+            (item) => item && item.id !== undefined && item.id !== null
+        );
+        selectAllCheckbox.checked =
+            selectableItems.length > 0 &&
+            selectableItems.every((item) => selectedHistoryIds.has(Number(item.id)));
+    }
+}
+
+function renderSelectableHistoryList(items = sessionTests) {
+    const container = $("historyRecordsList");
+    if (!container) return;
+
+    const validIds = new Set(
+        items
+            .filter((item) => item && item.id !== undefined && item.id !== null)
+            .map((item) => Number(item.id))
+    );
+    Array.from(selectedHistoryIds).forEach((id) => {
+        if (!validIds.has(id)) selectedHistoryIds.delete(id);
+    });
+
+    container.innerHTML = "";
+
+    if (!items.length) {
+        container.innerHTML =
+            '<p class="text-slate-500 py-2">No locally saved history records found.</p>';
+        updateSelectedHistoryUI();
+        return;
+    }
+
+    items
+        .slice()
+        .reverse()
+        .forEach((item) => {
+            const id = Number(item.id);
+            const hasId = Number.isFinite(id);
+            const row = document.createElement("label");
+            row.className =
+                "flex items-center justify-between gap-3 p-2.5 rounded-xl bg-white/50 hover:bg-white/75 cursor-pointer";
+
+            const left = document.createElement("div");
+            left.className = "flex items-center gap-2.5";
+
+            const checkbox = document.createElement("input");
+            checkbox.type = "checkbox";
+            checkbox.className = "rounded border-slate-300";
+            checkbox.disabled = !hasId;
+            checkbox.checked = hasId && selectedHistoryIds.has(id);
+
+            checkbox.addEventListener("change", () => {
+                if (!hasId) return;
+                if (checkbox.checked) {
+                    selectedHistoryIds.add(id);
+                } else {
+                    selectedHistoryIds.delete(id);
+                }
+                updateSelectedHistoryUI();
+            });
+
+            const formattedTime = new Date(item.timestamp).toLocaleString();
+            const info = document.createElement("span");
+            info.className = "font-medium text-slate-700";
+            info.textContent = `${formattedTime} • ${item.network_type || "Unknown"}`;
+
+            left.appendChild(checkbox);
+            left.appendChild(info);
+
+            const stats = document.createElement("span");
+            stats.className = "text-slate-600 font-semibold";
+            const dl = item.download_mbps != null ? `${Number(item.download_mbps).toFixed(1)} Mbps` : "—";
+            const ping = item.ping_ms != null ? `${Math.round(Number(item.ping_ms))} ms` : "—";
+            const score = item.connectivity_score != null ? `Score: ${Math.round(Number(item.connectivity_score))}` : "";
+            stats.textContent = `${dl} | ${ping} ${score ? `| ${score}` : ""}`;
+
+            row.appendChild(left);
+            row.appendChild(stats);
+            container.appendChild(row);
+        });
+
+    updateSelectedHistoryUI();
+}
+
+async function loadHistoryRetentionPolicy() {
+    const select = $("historyRetention");
+    if (!select) return;
+
+    try {
+        const response = await fetch(`${API_BASE}/network-history/retention`, {
+            method: "GET",
+            cache: "no-store",
+        });
+        if (!response.ok) return;
+        const data = await response.json();
+        select.value = data.retention_days ? String(data.retention_days) : "";
+    } catch (error) {
+        console.warn("Could not load retention policy:", error.message);
+    }
+}
+
+async function updateHistoryRetentionPolicy(daysValue) {
+    const retentionDays = daysValue ? Number(daysValue) : null;
+    try {
+        const response = await fetch(`${API_BASE}/network-history/retention`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ retention_days: retentionDays }),
+        });
+        if (!response.ok) {
+            throw new Error(`Retention update failed (${response.status})`);
+        }
+        const data = await response.json();
+        const deletedNote =
+            data.deleted_count > 0 ? ` Removed ${data.deleted_count} expired local record(s).` : "";
+        setHistoryFilterMessage(
+            retentionDays
+                ? `Retention set to ${retentionDays} days (local SQLite only).${deletedNote}`
+                : "Retention set to Keep Forever (local SQLite only)."
+        );
+        await loadNetworkHistory();
+    } catch (error) {
+        setHistoryFilterMessage(error.message, true);
+    }
+}
+
+function openHistoryDeleteDialog(mode) {
+    const dialog = $("historyDeleteDialog");
+    const title = $("historyDeleteDialogTitle");
+    const msg = $("historyDeleteDialogMessage");
+
+    pendingDeleteMode = mode;
+
+    if (mode === "selected") {
+        const count = selectedHistoryIds.size;
+        if (count === 0) return;
+        if (title) title.textContent = `Delete ${count} Selected Record(s)?`;
+        if (msg) {
+            msg.textContent = `This will permanently delete ${count} selected record(s) from your local SQLite storage only. External servers are not affected.`;
+        }
+    } else {
+        if (title) title.textContent = "Clear All Local Network History?";
+        if (msg) {
+            msg.textContent =
+                "This will permanently remove all saved network history records from your local SQLite database only. This action cannot be undone.";
+        }
+    }
+
+    if (dialog && typeof dialog.showModal === "function") {
+        dialog.showModal();
+    } else if (window.confirm(msg?.textContent || "Delete local history records?")) {
+        executePendingHistoryDeletion();
+    }
+}
+
+async function executePendingHistoryDeletion() {
+    const dialog = $("historyDeleteDialog");
+    if (dialog && dialog.open) dialog.close();
+
+    try {
+        if (pendingDeleteMode === "selected") {
+            const ids = Array.from(selectedHistoryIds);
+            const response = await fetch(`${API_BASE}/network-history/delete-selected`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ ids }),
+            });
+            if (!response.ok) throw new Error(`Delete failed (${response.status})`);
+            const data = await response.json();
+            selectedHistoryIds.clear();
+            setHistoryFilterMessage(
+                `Deleted ${data.deleted_count ?? ids.length} selected local record(s).`
+            );
+        } else if (pendingDeleteMode === "all") {
+            const response = await fetch(`${API_BASE}/network-history`, {
+                method: "DELETE",
+            });
+            if (!response.ok) throw new Error(`Clear all failed (${response.status})`);
+            selectedHistoryIds.clear();
+            setHistoryFilterMessage("All locally stored network history has been cleared.");
+        }
+
+        pendingDeleteMode = null;
+        await loadNetworkHistory();
+    } catch (error) {
+        setHistoryFilterMessage(error.message, true);
+    }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+    loadHistoryRetentionPolicy();
+
+    $("historyRetention")?.addEventListener("change", (event) => {
+        updateHistoryRetentionPolicy(event.target.value);
+    });
+
+    $("selectAllHistoryRecords")?.addEventListener("change", (event) => {
+        const checked = event.target.checked;
+        selectedHistoryIds.clear();
+        if (checked) {
+            sessionTests.forEach((item) => {
+                if (item && item.id !== undefined && item.id !== null) {
+                    selectedHistoryIds.add(Number(item.id));
+                }
+            });
+        }
+        renderSelectableHistoryList(sessionTests);
+    });
+
+    $("deleteSelectedHistory")?.addEventListener("click", () => {
+        openHistoryDeleteDialog("selected");
+    });
+
+    $("clearAllHistory")?.addEventListener("click", () => {
+        openHistoryDeleteDialog("all");
+    });
+
+    $("cancelHistoryDeleteBtn")?.addEventListener("click", () => {
+        pendingDeleteMode = null;
+        $("historyDeleteDialog")?.close();
+    });
+
+    $("confirmHistoryDeleteBtn")?.addEventListener("click", () => {
+        executePendingHistoryDeletion();
+    });
+});
