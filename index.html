@@ -446,7 +446,7 @@
     </div>
   </section>
 
-  <!-- NETWORK HISTORY -->
+ <!-- NETWORK HISTORY -->
   <section id="history" class="history-card glass-card p-5 md:p-6 space-y-4" aria-labelledby="historyHeading">
 
     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/60 pb-3">
@@ -738,6 +738,25 @@
     </div>
 
   </section>
+
+</main>
+
+<!-- TOAST NOTIFICATION -->
+<div id="toast"
+     class="fixed bottom-6 right-6 px-4 py-3 rounded-xl bg-indigo-950 text-white text-xs font-semibold shadow-2xl opacity-0 pointer-events-none transition-all z-50"
+     role="status"
+     aria-live="polite">
+  <span id="toast-message">Notification</span>
+</div>
+
+<!-- SHARED SCORING MODULE (loaded first, tested by the node suite) -->
+<script src="js/connectivity-score.js"></script>
+
+<!-- PRIMARY JAVASCRIPT -->
+<script src="js/script.js"></script>
+
+</body>
+</html>
 
 </main>
 
