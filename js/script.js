@@ -3086,7 +3086,7 @@ async function executePendingHistoryDeletion() {
         setHistoryFilterMessage(error.message, true);
     }
 }
-
+if (type of document !=="undefined"){
 document.addEventListener("DOMContentLoaded", () => {
     loadHistoryRetentionPolicy();
 
@@ -3124,3 +3124,4 @@ document.addEventListener("DOMContentLoaded", () => {
         executePendingHistoryDeletion();
     });
 });
+}
