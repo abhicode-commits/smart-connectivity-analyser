@@ -1,14 +1,9 @@
 from fastapi import FastAPI, HTTPException, Query
-
 from fastapi.encoders import jsonable_encoder
-
 from fastapi.exceptions import RequestValidationError
-
 from fastapi.middleware.cors import CORSMiddleware
-
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -16,19 +11,14 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-
 from pathlib import Path
-
 import sqlite3
 import json
 import math
 import sys
-
 import platform
 import subprocess
-
 import re
-
 import statistics
 from datetime import date, datetime, timedelta
 
@@ -73,44 +63,22 @@ else:
     AI_IMPORT_ERROR = None
 
 
-
-
-
-
 # ============================================================
-
 # APPLICATION
-
 # ============================================================
-
-
 
 app = FastAPI(
-
     title="Smart Internet Connectivity Analyser",
-
     version="1.0.0"
-
 )
-
-
-
-
 
 app.add_middleware(
-
     CORSMiddleware,
-
     allow_origins=["*"],
-
     allow_credentials=True,
-
     allow_methods=["*"],
-
     allow_headers=["*"],
-
 )
-
 
 
 # ============================================================
@@ -132,34 +100,18 @@ def make_json_safe(value):
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request, exc):
-    # Same response as FastAPI's default handler. Rejected NaN or
-    # Infinity inputs are echoed as strings, since they cannot be
-    # encoded as JSON and would otherwise cause a 500 error.
     return JSONResponse(
         status_code=422,
         content={"detail": make_json_safe(jsonable_encoder(exc.errors()))},
     )
 
 
-
-
-
 # ============================================================
-
 # PATHS
-
 # ============================================================
-
-
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-
-
-
 DB_PATH = BASE_DIR / "network_history.db"
-
-
-
 INDEX_FILE = BASE_DIR / "index.html"
 
 
@@ -181,7 +133,6 @@ app.mount(
     StaticFiles(directory=str(JS_DIR)),
     name="js"
 )
-
 
 
 # ============================================================
@@ -231,8 +182,6 @@ def load_ai_models():
         )
         ai_anomaly_model.eval()
 
-        # Establish an anomaly threshold from reconstruction errors
-        # on the same real measurements used during training.
         data = load_network_data()
         errors = []
 
@@ -273,122 +222,65 @@ def load_ai_models():
         return False, f"AI model loading failed: {error}"
 
 
-
 # ============================================================
-
 # DATABASE
-
 # ============================================================
-
-
 
 def get_connection():
-
     connection = sqlite3.connect(DB_PATH)
-
-
-
     connection.row_factory = sqlite3.Row
-
-
-
     return connection
 
 
-
-
-
 def initialize_database():
-
-
-
     connection = get_connection()
-
-
-
     cursor = connection.cursor()
 
-
-
     cursor.execute(
-
         """
-
         CREATE TABLE IF NOT EXISTS network_tests (
-
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-
-
             timestamp TEXT NOT NULL,
-
-
-
             download_mbps REAL,
-
-
-
             upload_mbps REAL,
-
-
-
             ping_ms REAL,
-
-
-
             jitter_ms REAL,
-
-
-
             packet_loss REAL,
-
-
-
             network_type TEXT,
-
-
-
             connectivity_score REAL,
-
-
-
             latitude REAL,
-
-
-
             longitude REAL
-
         )
-
         """
-
     )
 
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS history_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            retention_days INTEGER
+        )
+        """
+    )
 
+    cursor.execute(
+        """
+        INSERT OR IGNORE INTO history_settings (id, retention_days)
+        VALUES (1, NULL)
+        """
+    )
 
     connection.commit()
-
-
-
     connection.close()
-
-
-
 
 
 initialize_database()
 AI_MODELS_READY, AI_MODELS_MESSAGE = load_ai_models()
 
 
-
-
 # ============================================================
-
 # DATA MODEL
-
 # ============================================================
-
-
 
 MEASUREMENT_FIELDS = (
     "download_mbps",
@@ -401,54 +293,19 @@ MEASUREMENT_FIELDS = (
 
 
 class NetworkTest(BaseModel):
-
-    # Reject NaN and Infinity. They cannot be stored or returned
-    # as valid JSON, and would break /api/network-history.
     model_config = ConfigDict(allow_inf_nan=False)
 
-
-
     timestamp: str | None = None
-
-
-
     download_mbps: float | None = Field(default=None, ge=0)
-
-
-
     upload_mbps: float | None = Field(default=None, ge=0)
-
-
-
     ping_ms: float | None = Field(default=None, ge=0)
-
-
-
     jitter_ms: float | None = Field(default=None, ge=0)
-
-
-
     packet_loss: float | None = Field(default=None, ge=0, le=100)
-
-
-
     network_type: str | None = Field(default="Unknown", max_length=50)
-
-
-
     connectivity_score: float | None = Field(default=None, ge=0, le=100)
-
-
-
     latitude: float | None = Field(default=None, ge=-90, le=90)
-
-
-
     longitude: float | None = Field(default=None, ge=-180, le=180)
 
-
-
-    # Pydantic would otherwise store true/false as 1.0/0.0.
     @field_validator(
         *MEASUREMENT_FIELDS,
         "latitude",
@@ -459,27 +316,20 @@ class NetworkTest(BaseModel):
     def reject_boolean_values(cls, value):
         if isinstance(value, bool):
             raise ValueError("Input should be a number, not a boolean")
-
         return value
-
 
     @field_validator("timestamp")
     @classmethod
     def validate_timestamp(cls, value):
         if value is None or not value.strip():
             return None
-
         try:
-            # Python < 3.11 does not accept a trailing "Z".
             datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
             raise ValueError(
                 "timestamp must be an ISO 8601 date-time string"
             )
-
-        # Keep the original string so stored values are unchanged.
         return value
-
 
     @model_validator(mode="after")
     def validate_record(self):
@@ -488,1083 +338,636 @@ class NetworkTest(BaseModel):
                 "At least one network measurement is required: "
                 + ", ".join(MEASUREMENT_FIELDS)
             )
-
         if (self.latitude is None) != (self.longitude is None):
             raise ValueError(
                 "latitude and longitude must be provided together"
             )
-
         return self
 
 
+class DeleteSelectedRequest(BaseModel):
+    ids: list[int] = Field(..., min_length=1)
 
 
-
-# ============================================================
-
-# ROOT
-
-# ============================================================
+class RetentionPolicyRequest(BaseModel):
+    retention_days: int | None = Field(default=None, ge=1, le=3650)
 
 
+def apply_retention_policy(connection: sqlite3.Connection) -> int:
+    cursor = connection.cursor()
+    cursor.execute("SELECT retention_days FROM history_settings WHERE id = 1")
+    row = cursor.fetchone()
+    if not row or row["retention_days"] is None:
+        return 0
+        cutoff = (datetime.now() - timedelta(days=int(row["retention_days"]))).isoformat()
+cursor.execute("DELETE FROM network_tests WHERE timestamp < ?", (cutoff,))
+return cursor.rowcount
+
+============================================================
+
+
+ROOT
+
+
+============================================================
 
 @app.get("/")
-
 def root():
-
-
-
-    if INDEX_FILE.exists():
-
-        return FileResponse(INDEX_FILE)
-
-
-
-    return {
-
-        "message": "Smart Internet Connectivity Analyser API"
-
-    }
-
-
-
-
-
-# ============================================================
-
-# HEALTH CHECK
-
-# ============================================================
-
-
-
-@app.get("/api/health")
-
-def health():
-
-
-
-    return {
-
-        "status": "ok",
-
-        "service": "Smart Internet Connectivity Analyser"
-
-    }
-
-
-
-
-
-# ============================================================
-
-# SIMPLE PING
-
-# ============================================================
-
-
-
-@app.get("/api/ping")
-
-def ping():
-
-
-
-    return {
-
-        "message": "Backend is running",
-
-        "status": "ok"
-
-    }
-
-
-
-
-# ============================================================
-# PING OUTPUT PARSING
-# ============================================================
-
-# Matches one reply's round-trip time on Windows ("time=12ms",
-# "time<1ms") and Linux/macOS ("time=12.4 ms").
-PING_TIME_PATTERN = re.compile(
-    r"time[=<]\s*(\d+(?:\.\d+)?)\s*ms",
-    re.IGNORECASE,
-)
-
-# Matches the packet-loss summary on Windows ("(0% loss)"),
-# Linux ("25% packet loss") and macOS ("0.0% packet loss").
-PACKET_LOSS_PATTERN = re.compile(
-    r"(\d+(?:\.\d+)?)%\s*(?:packet\s+)?loss",
-    re.IGNORECASE,
-)
-
-
-def parse_ping_output(output):
-    """Return (ping_times_ms, packet_loss_percent) from ping output.
-
-    packet_loss_percent is None when no loss summary is found.
-    """
-    ping_times = [
-        float(value)
-        for value in PING_TIME_PATTERN.findall(output)
-    ]
-
-    loss_match = PACKET_LOSS_PATTERN.search(output)
-    packet_loss = float(loss_match.group(1)) if loss_match else None
-
-    return ping_times, packet_loss
-
-
-def build_ping_command(target, packet_count, timeout_seconds, system):
-    """Return the ping command for the given operating system.
-
-    system is a platform.system() value: "Windows", "Linux" or
-    "Darwin" (macOS). The target goes last, because macOS stops
-    reading options at the first non-option argument.
-    """
-    if system == "Windows":
-        # -n: number of pings, -w: reply timeout in milliseconds.
-        return [
-            "ping",
-            "-n", str(packet_count),
-            "-w", str(timeout_seconds * 1000),
-            target,
-        ]
-
-    if system == "Darwin":
-        # -c: number of pings, -W: reply timeout in milliseconds.
-        return [
-            "ping",
-            "-c", str(packet_count),
-            "-W", str(timeout_seconds * 1000),
-            target,
-        ]
-
-    # Linux and other Unix-like systems.
-    # -c: number of pings, -W: reply timeout in seconds.
-    return [
-        "ping",
-        "-c", str(packet_count),
-        "-W", str(timeout_seconds),
-        target,
-    ]
-
-
-# ============================================================
-
-# NETWORK QUALITY
-
-# ============================================================
-
-
-
-@app.get("/api/network-quality")
-
-def network_quality():
-
-
-
-    target = "1.1.1.1"
-
-
-
-    packet_count = 10
-
-
-
-    timeout_seconds = 2
-
-    command = build_ping_command(
-        target,
-        packet_count,
-        timeout_seconds,
-        platform.system(),
-    )
-
-
-
-    try:
-
-
-
-        process = subprocess.run(
-
-            command,
-
-            capture_output=True,
-
-            text=True,
-
-            timeout=30
-
-        )
-
-
-
-        output = process.stdout
-
-
-
-    except FileNotFoundError:
-        raise HTTPException(
-            status_code=503,
-            detail="The ping command is not available on this server.",
-        )
-
-    except subprocess.TimeoutExpired:
-
-
-
-        raise HTTPException(
-
-            status_code=504,
-
-            detail="Ping measurement timed out."
-
-        )
-
-
-
-    except Exception as error:
-
-
-
-        raise HTTPException(
-
-            status_code=500,
-
-            detail=f"Ping measurement failed: {error}"
-
-        )
-
-
-
-
-    # ========================================================
-    # PARSE PING TIMES AND PACKET LOSS
-    # ========================================================
-
-    ping_times, packet_loss = parse_ping_output(output)
-
-    # No replies and no loss summary means ping failed to run
-    # (for example, no permission to send pings). That is not
-    # the same as a real 100% packet loss.
-    if not ping_times and packet_loss is None:
-        reason = process.stderr.strip() or "ping produced no output"
-        raise HTTPException(
-            status_code=503,
-            detail=f"Ping measurement failed: {reason}",
-        )
-
-
-    # If ping printed no loss summary, estimate it from
-    # how many replies were received.
-    if packet_loss is None:
-        packet_loss = (
-            (packet_count - len(ping_times))
-            / packet_count
-        ) * 100
-
-
-    # ========================================================
-    # NO RESPONSE
-    # ========================================================
-
-
-
-    if len(ping_times) == 0:
-
-
-
-        return {
-
-            "target": target,
-
-            "packets_sent": packet_count,
-
-            "packets_received": 0,
-
-            "packet_loss": 100.0,
-
-            "ping_ms": None,
-
-            "min_ping_ms": None,
-
-            "max_ping_ms": None,
-
-            "jitter_ms": None,
-
-            "status": "unreachable"
-
-        }
-
-
-
-
-
-    # ========================================================
-
-    # PING STATISTICS
-
-    # ========================================================
-
-
-
-    average_ping = statistics.mean(
-
-        ping_times
-
-    )
-
-
-
-    minimum_ping = min(
-
-        ping_times
-
-    )
-
-
-
-    maximum_ping = max(
-
-        ping_times
-
-    )
-
-
-
-
-
-    # ========================================================
-
-    # JITTER
-
-    #
-
-    # Mean absolute difference between consecutive
-
-    # successful ping measurements.
-
-    # ========================================================
-
-
-
-    if len(ping_times) >= 2:
-
-
-
-        differences = []
-
-
-
-        for i in range(
-
-            1,
-
-            len(ping_times)
-
-        ):
-
-
-
-            difference = abs(
-
-                ping_times[i] -
-
-                ping_times[i - 1]
-
-            )
-
-
-
-            differences.append(
-
-                difference
-
-            )
-
-
-
-
-
-        jitter = statistics.mean(
-
-            differences
-
-        )
-
-
-
-    else:
-
-
-
-        jitter = 0.0
-
-
-
-
-
-    # ========================================================
-
-    # STATUS
-
-    # ========================================================
-
-
-
-    if average_ping <= 50:
-
-
-
-        status = "excellent"
-
-
-
-    elif average_ping <= 100:
-
-
-
-        status = "good"
-
-
-
-    elif average_ping <= 200:
-
-
-
-        status = "average"
-
-
-
-    else:
-
-
-
-        status = "poor"
-
-
-
-
-
-    return {
-
-
-
-        "target": target,
-
-
-
-        "packets_sent": packet_count,
-
-
-
-        "packets_received": len(
-
-            ping_times
-
-        ),
-
-
-
-        "packet_loss": round(
-
-            packet_loss,
-
-            2
-
-        ),
-
-
-
-        "ping_ms": round(
-
-            average_ping,
-
-            2
-
-        ),
-
-
-
-        "min_ping_ms": round(
-
-            minimum_ping,
-
-            2
-
-        ),
-
-
-
-        "max_ping_ms": round(
-
-            maximum_ping,
-
-            2
-
-        ),
-
-
-
-        "jitter_ms": round(
-
-            jitter,
-
-            2
-
-        ),
-
-
-
-        "samples": ping_times,
-
-
-
-        "status": status
-
-    }
-
-
-
-
-
-# ============================================================
-
-# SAVE NETWORK TEST
-
-# ============================================================
-
-
-
-@app.post("/api/network-test")
-
-def save_network_test(data: NetworkTest):
-
-
-
-    timestamp = (
-
-        data.timestamp
-
-        or datetime.now().isoformat()
-
-    )
-
-
-
-
-
-    connection = get_connection()
-
-
-
-    cursor = connection.cursor()
-
-
-
-
-
-    cursor.execute(
-
-        """
-
-        INSERT INTO network_tests (
-
-            timestamp,
-
-            download_mbps,
-
-            upload_mbps,
-
-            ping_ms,
-
-            jitter_ms,
-
-            packet_loss,
-
-            network_type,
-
-            connectivity_score,
-
-            latitude,
-
-            longitude
-
-        )
-
-
-
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-
-        """,
-
-
-
-        (
-
-            timestamp,
-
-
-
-            data.download_mbps,
-
-
-
-            data.upload_mbps,
-
-
-
-            data.ping_ms,
-
-
-
-            data.jitter_ms,
-
-
-
-            data.packet_loss,
-
-
-
-            data.network_type,
-
-
-
-            data.connectivity_score,
-
-
-
-            data.latitude,
-
-
-
-            data.longitude
-
-        )
-
-    )
-
-
-
-
-
-    connection.commit()
-
-
-
-    test_id = cursor.lastrowid
-
-
-
-    connection.close()
-
-
-
-
-
-    return {
-
-
-
-        "status": "success",
-
-
-
-        "message": "Network test saved",
-
-
-
-        "id": test_id
-
-    }
-
-
-
-
-
-# ============================================================
-
-# NETWORK HISTORY
-
-# ============================================================
-
-
-HISTORY_RANGE_WINDOWS = {
-    "1h": timedelta(hours=1),
-    "24h": timedelta(hours=24),
-    "7d": timedelta(days=7),
-    "recent": timedelta(days=1),
-    # Preserve existing API range values for compatibility.
-    "hourly": timedelta(hours=24),
-    "daily": timedelta(days=7),
-    "weekly": timedelta(days=30),
-    "monthly": timedelta(days=365),
+if INDEX_FILE.exists():
+return FileResponse(INDEX_FILE)
+return {
+"message": "Smart Internet Connectivity Analyser API"
 }
 
+============================================================
 
+
+HEALTH CHECK
+
+
+============================================================
+
+@app.get("/api/health")
+def health():
+return {
+"status": "ok",
+"service": "Smart Internet Connectivity Analyser"
+}
+
+============================================================
+
+
+SIMPLE PING
+
+
+============================================================
+
+@app.get("/api/ping")
+def ping():
+return {
+"message": "Backend is running",
+"status": "ok"
+}
+
+============================================================
+
+
+PING OUTPUT PARSING
+
+
+============================================================
+
+PING_TIME_PATTERN = re.compile(
+r"time[=<]\s*(\d+(?:.\d+)?)\s*ms",
+re.IGNORECASE,
+)
+PACKET_LOSS_PATTERN = re.compile(
+r"(\d+(?:.\d+)?)%\s*(?:packet\s+)?loss",
+re.IGNORECASE,
+)
+def parse_ping_output(output):
+ping_times = [
+float(value)
+for value in PING_TIME_PATTERN.findall(output)
+]
+loss_match = PACKET_LOSS_PATTERN.search(output)
+packet_loss = float(loss_match.group(1)) if loss_match else None
+return ping_times, packet_loss
+def build_ping_command(target, packet_count, timeout_seconds, system):
+if system == "Windows":
+return [
+"ping",
+"-n", str(packet_count),
+"-w", str(timeout_seconds * 1000),
+target,
+]
+if system == "Darwin":
+return [
+"ping",
+"-c", str(packet_count),
+"-W", str(timeout_seconds * 1000),
+target,
+]
+return [
+"ping",
+"-c", str(packet_count),
+"-W", str(timeout_seconds),
+target,
+]
+
+============================================================
+
+
+NETWORK QUALITY
+
+
+============================================================
+
+@app.get("/api/network-quality")
+def network_quality():
+target = "1.1.1.1"
+packet_count = 10
+timeout_seconds = 2
+command = build_ping_command(
+target,
+packet_count,
+timeout_seconds,
+platform.system(),
+)
+try:
+process = subprocess.run(
+command,
+capture_output=True,
+text=True,
+timeout=30
+)
+output = process.stdout
+except FileNotFoundError:
+raise HTTPException(
+status_code=503,
+detail="The ping command is not available on this server.",
+)
+except subprocess.TimeoutExpired:
+raise HTTPException(
+status_code=504,
+detail="Ping measurement timed out."
+)
+except Exception as error:
+raise HTTPException(
+status_code=500,
+detail=f"Ping measurement failed: {error}"
+)
+ping_times, packet_loss = parse_ping_output(output)
+if not ping_times and packet_loss is None:
+reason = process.stderr.strip() or "ping produced no output"
+raise HTTPException(
+status_code=503,
+detail=f"Ping measurement failed: {reason}",
+)
+if packet_loss is None:
+packet_loss = (
+(packet_count - len(ping_times))
+/ packet_count
+) * 100
+if len(ping_times) == 0:
+return {
+"target": target,
+"packets_sent": packet_count,
+"packets_received": 0,
+"packet_loss": 100.0,
+"ping_ms": None,
+"min_ping_ms": None,
+"max_ping_ms": None,
+"jitter_ms": None,
+"status": "unreachable"
+}
+average_ping = statistics.mean(ping_times)
+minimum_ping = min(ping_times)
+maximum_ping = max(ping_times)
+if len(ping_times) >= 2:
+differences = []
+for i in range(1, len(ping_times)):
+difference = abs(ping_times[i] - ping_times[i - 1])
+differences.append(difference)
+jitter = statistics.mean(differences)
+else:
+jitter = 0.0
+if average_ping <= 50:
+status = "excellent"
+elif average_ping <= 100:
+status = "good"
+elif average_ping <= 200:
+status = "average"
+else:
+status = "poor"
+return {
+"target": target,
+"packets_sent": packet_count,
+"packets_received": len(ping_times),
+"packet_loss": round(packet_loss, 2),
+"ping_ms": round(average_ping, 2),
+"min_ping_ms": round(minimum_ping, 2),
+"max_ping_ms": round(maximum_ping, 2),
+"jitter_ms": round(jitter, 2),
+"samples": ping_times,
+"status": status
+}
+
+============================================================
+
+
+SAVE NETWORK TEST
+
+
+============================================================
+
+@app.post("/api/network-test")
+def save_network_test(data: NetworkTest):
+timestamp = (
+data.timestamp
+or datetime.now().isoformat()
+)
+connection = get_connection()
+cursor = connection.cursor()
+cursor.execute(
+"""
+INSERT INTO network_tests (
+timestamp,
+download_mbps,
+upload_mbps,
+ping_ms,
+jitter_ms,
+packet_loss,
+network_type,
+connectivity_score,
+latitude,
+longitude
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+""",
+(
+timestamp,
+data.download_mbps,
+data.upload_mbps,
+data.ping_ms,
+data.jitter_ms,
+data.packet_loss,
+data.network_type,
+data.connectivity_score,
+data.latitude,
+data.longitude
+)
+)
+test_id = cursor.lastrowid
+apply_retention_policy(connection)
+connection.commit()
+connection.close()
+return {
+"status": "success",
+"message": "Network test saved",
+"id": test_id
+}
+
+============================================================
+
+
+NETWORK HISTORY
+
+
+============================================================
+
+HISTORY_RANGE_WINDOWS = {
+"1h": timedelta(hours=1),
+"24h": timedelta(hours=24),
+"7d": timedelta(days=7),
+"recent": timedelta(days=1),
+"hourly": timedelta(hours=24),
+"daily": timedelta(days=7),
+"weekly": timedelta(days=30),
+"monthly": timedelta(days=365),
+}
 @app.get("/api/network-history")
 def get_network_history(
-    range: str = "recent",
-    start_date: date | None = None,
-    end_date: date | None = None,
-    min_score: float | None = Query(default=None, ge=0, le=100),
-    max_score: float | None = Query(default=None, ge=0, le=100),
+range: str = "recent",
+start_date: date | None = None,
+end_date: date | None = None,
+min_score: float | None = Query(default=None, ge=0, le=100),
+max_score: float | None = Query(default=None, ge=0, le=100),
 ):
-    if range != "all" and range not in HISTORY_RANGE_WINDOWS:
-        supported = ", ".join(["all", *HISTORY_RANGE_WINDOWS])
-        raise HTTPException(
-            status_code=422,
-            detail=f"Unsupported range '{range}'. Supported values: {supported}",
-        )
+if range != "all" and range not in HISTORY_RANGE_WINDOWS:
+supported = ", ".join(["all", *HISTORY_RANGE_WINDOWS])
+raise HTTPException(
+status_code=422,
+detail=f"Unsupported range '{range}'. Supported values: {supported}",
+)
+if (
+start_date is not None
+and end_date is not None
+and start_date > end_date
+):
+raise HTTPException(
+status_code=422,
+detail="start_date must be on or before end_date",
+)
+if (
+min_score is not None
+and max_score is not None
+and min_score > max_score
+):
+raise HTTPException(
+status_code=422,
+detail="min_score must be less than or equal to max_score",
+)
+connection = get_connection()
+try:
+cursor = connection.cursor()
+conditions = []
+parameters = []
+if start_date is None and end_date is None:
+if range != "all":
+duration = HISTORY_RANGE_WINDOWS[range]
+since = datetime.now() - duration
+conditions.append("timestamp >= ?")
+parameters.append(since.isoformat())
+else:
+if start_date is not None:
+conditions.append("timestamp >= ?")
+parameters.append(start_date.isoformat())
+if end_date is not None:
+end_exclusive = end_date + timedelta(days=1)
+conditions.append("timestamp < ?")
+parameters.append(end_exclusive.isoformat())
+if min_score is not None:
+conditions.append("connectivity_score >= ?")
+parameters.append(min_score)
+if max_score is not None:
+conditions.append("connectivity_score <= ?")
+parameters.append(max_score)
+query = """
+SELECT
+id,
+timestamp,
+download_mbps,
+upload_mbps,
+ping_ms,
+jitter_ms,
+packet_loss,
+network_type,
+connectivity_score,
+latitude,
+longitude
+FROM network_tests
+"""
+if conditions:
+query += " WHERE " + " AND ".join(conditions)
+query += " ORDER BY timestamp ASC"
+cursor.execute(query, parameters)
+rows = cursor.fetchall()
+return [dict(row) for row in rows]
+finally:
+connection.close()
 
-    # Validate date range.
-    if (
-        start_date is not None
-        and end_date is not None
-        and start_date > end_date
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail="start_date must be on or before end_date",
-        )
-
-    # Validate connectivity score range.
-    if (
-        min_score is not None
-        and max_score is not None
-        and min_score > max_score
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail="min_score must be less than or equal to max_score",
-        )
-
-    connection = get_connection()
-
-    try:
-        cursor = connection.cursor()
-
-        conditions = []
-        parameters = []
-
-        # Preserve the existing time-range behaviour
-        # whenever a custom date range is not supplied.
-        if start_date is None and end_date is None:
-            if range != "all":
-                duration = HISTORY_RANGE_WINDOWS[range]
-                since = datetime.now() - duration
-                conditions.append("timestamp >= ?")
-                parameters.append(since.isoformat())
-
-
-        else:
-            if start_date is not None:
-                conditions.append("timestamp >= ?")
-                parameters.append(start_date.isoformat())
-
-            if end_date is not None:
-                # Exclusive upper boundary includes the entire end date.
-                end_exclusive = end_date + timedelta(days=1)
-
-                conditions.append("timestamp < ?")
-                parameters.append(end_exclusive.isoformat())
-
-        if min_score is not None:
-            conditions.append("connectivity_score >= ?")
-            parameters.append(min_score)
-
-        if max_score is not None:
-            conditions.append("connectivity_score <= ?")
-            parameters.append(max_score)
-
-        query = """
-             SELECT
-                id,
-                timestamp,
-                download_mbps,
-                upload_mbps,
-                ping_ms,
-                jitter_ms,
-                packet_loss,
-                network_type,
-                connectivity_score,
-                latitude,
-                longitude
-            FROM network_tests
-        """
-
-        if conditions:
-            query += " WHERE " + " AND ".join(conditions)
-
-        query += " ORDER BY timestamp ASC"
-
-        cursor.execute(query, parameters)
-
-        rows = cursor.fetchall()
-
-        return [dict(row) for row in rows]
-
-    finally:
-        connection.close()
+============================================================
 
 
+AI STATUS
 
-# ============================================================
-# AI STATUS
-# ============================================================
+
+============================================================
 
 @app.get("/api/ai/status")
 def ai_status():
-    data = load_network_data() if AI_IMPORT_ERROR is None else []
+data = load_network_data() if AI_IMPORT_ERROR is None else []
+return {
+"success": AI_MODELS_READY,
+"message": AI_MODELS_MESSAGE,
+"prediction_model": {
+"name": "HistGradientBoosting",
+"loaded": FINAL_PREDICTOR_READY,
+},
+"anomaly_model": {
+"name": "Transformer Autoencoder",
+"loaded": ai_anomaly_model is not None,
+},
+"records_available": len(data),
+"sequence_length": SEQUENCE_LENGTH,
+}
 
-    return {
-        "success": AI_MODELS_READY,
-        "message": AI_MODELS_MESSAGE,
-        "prediction_model": {
-            "name": "HistGradientBoosting",
-            "loaded": FINAL_PREDICTOR_READY,
-        },
-        "anomaly_model": {
-            "name": "Transformer Autoencoder",
-            "loaded": ai_anomaly_model is not None,
-        },
-        "records_available": len(data),
-        "sequence_length": SEQUENCE_LENGTH,
-    }
+============================================================
 
 
-# ============================================================
-# AI PREDICTION - HISTGRADIENTBOOSTING
-# ============================================================
+AI PREDICTION - HISTGRADIENTBOOSTING
+
+
+============================================================
 
 @app.get("/api/ai/prediction")
 def ai_prediction():
-    if not FINAL_PREDICTOR_READY:
-        raise HTTPException(
-            status_code=503,
-            detail=getattr(final_predictor, "message", AI_MODELS_MESSAGE),
-        )
+if not FINAL_PREDICTOR_READY:
+raise HTTPException(
+status_code=503,
+detail=getattr(final_predictor, "message", AI_MODELS_MESSAGE),
+)
+try:
+predicted_score = final_predictor.predict()
+if predicted_score >= 75:
+quality = "Excellent"
+elif predicted_score >= 50:
+quality = "Good"
+elif predicted_score >= 25:
+quality = "Average"
+else:
+quality = "Poor"
+return {
+"success": True,
+"model": "HistGradientBoosting",
+"input_records": SEQUENCE_LENGTH,
+"training_records": final_predictor.record_count,
+"training_samples": final_predictor.training_samples,
+"predicted_connectivity_score": round(
+predicted_score,
+2,
+),
+"predicted_quality": quality,
+}
+except Exception as error:
+raise HTTPException(
+status_code=500,
+detail=f"Prediction failed: {error}",
+)
 
-    try:
-        predicted_score = final_predictor.predict()
-
-        if predicted_score >= 75:
-            quality = "Excellent"
-        elif predicted_score >= 50:
-            quality = "Good"
-        elif predicted_score >= 25:
-            quality = "Average"
-        else:
-            quality = "Poor"
-
-        return {
-            "success": True,
-            "model": "HistGradientBoosting",
-            "input_records": SEQUENCE_LENGTH,
-            "training_records": final_predictor.record_count,
-            "training_samples": final_predictor.training_samples,
-            "predicted_connectivity_score": round(
-                predicted_score,
-                2,
-            ),
-            "predicted_quality": quality,
-        }
-
-    except Exception as error:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Prediction failed: {error}",
-        )
+============================================================
 
 
-# ============================================================
-# AI ANOMALY
-# ============================================================
+AI ANOMALY
+
+
+============================================================
 
 @app.get("/api/ai/anomaly")
 def ai_anomaly():
-    if (
-        not AI_MODELS_READY
-        or ai_anomaly_model is None
-        or ai_scaler is None
-    ):
-        raise HTTPException(
-            status_code=503,
-            detail=AI_MODELS_MESSAGE,
-        )
+if (
+not AI_MODELS_READY
+or ai_anomaly_model is None
+or ai_scaler is None
+):
+raise HTTPException(
+status_code=503,
+detail=AI_MODELS_MESSAGE,
+)
+data = load_network_data()
+if not data:
+raise HTTPException(
+status_code=400,
+detail="No complete network record is available.",
+)
+latest = data[-1]
+try:
+normalized = normalize_values(
+latest["values"],
+ai_scaler,
+)
+sample = torch.tensor(
+normalized,
+dtype=torch.float32,
+).reshape(1, 1, len(FEATURES))
+with torch.no_grad():
+reconstructed = ai_anomaly_model(sample)
+target = sample[:, -1, :]
+reconstruction_error = torch.mean(
+(reconstructed - target) ** 2
+).item()
+if not math.isfinite(reconstruction_error):
+raise ValueError(
+"The model returned a non-finite reconstruction error."
+)
+explanation = build_anomaly_explanation(
+FEATURES,
+latest["values"],
+target.reshape(-1).tolist(),
+reconstructed.reshape(-1).tolist(),
+ai_scaler,
+)
+threshold = float(ai_anomaly_threshold or 0.05)
+if not math.isfinite(threshold):
+raise ValueError("The anomaly threshold is not finite.")
+is_anomaly = reconstruction_error > threshold
+return {
+"success": True,
+"model": "Transformer Autoencoder",
+"timestamp": latest["timestamp"],
+"anomaly": bool(is_anomaly),
+"reconstruction_error": round(
+float(reconstruction_error),
+6,
+),
+"threshold": round(threshold, 6),
+"status": (
+"Anomaly detected"
+if is_anomaly
+else "No anomaly detected"
+),
+"explanation": explanation,
+}
+except Exception as error:
+raise HTTPException(
+status_code=500,
+detail=f"Anomaly detection failed: {error}",
+)
 
-    data = load_network_data()
-
-    if not data:
-        raise HTTPException(
-            status_code=400,
-            detail="No complete network record is available.",
-        )
-
-    latest = data[-1]
-
-    try:
-        normalized = normalize_values(
-            latest["values"],
-            ai_scaler,
-        )
-
-        sample = torch.tensor(
-            normalized,
-            dtype=torch.float32,
-        ).reshape(1, 1, len(FEATURES))
-
-        with torch.no_grad():
-            reconstructed = ai_anomaly_model(sample)
-            target = sample[:, -1, :]
-            reconstruction_error = torch.mean(
-                (reconstructed - target) ** 2
-            ).item()
-
-        if not math.isfinite(reconstruction_error):
-            raise ValueError(
-                "The model returned a non-finite reconstruction error."
-            )
-
-        explanation = build_anomaly_explanation(
-            FEATURES,
-            latest["values"],
-            target.reshape(-1).tolist(),
-            reconstructed.reshape(-1).tolist(),
-            ai_scaler,
-        )
-
-        threshold = float(ai_anomaly_threshold or 0.05)
-        if not math.isfinite(threshold):
-            raise ValueError("The anomaly threshold is not finite.")
-        is_anomaly = reconstruction_error > threshold
-
-        return {
-            "success": True,
-            "model": "Transformer Autoencoder",
-            "timestamp": latest["timestamp"],
-            "anomaly": bool(is_anomaly),
-            "reconstruction_error": round(
-                float(reconstruction_error),
-                6,
-            ),
-            "threshold": round(threshold, 6),
-            "status": (
-                "Anomaly detected"
-                if is_anomaly
-                else "No anomaly detected"
-            ),
-            "explanation": explanation,
-        }
-
-    except Exception as error:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Anomaly detection failed: {error}",
-        )
+============================================================
 
 
-# ============================================================
-# COMBINED AI ANALYSIS
-# ============================================================
+COMBINED AI ANALYSIS
+
+
+============================================================
 
 @app.get("/api/ai/analyze")
 def ai_analyze():
-    if not AI_MODELS_READY:
-        return {
-            "success": False,
-            "available": False,
-            "message": AI_MODELS_MESSAGE,
-            "prediction": None,
-            "anomaly": None,
-        }
+if not AI_MODELS_READY:
+return {
+"success": False,
+"available": False,
+"message": AI_MODELS_MESSAGE,
+"prediction": None,
+"anomaly": None,
+}
+return {
+"success": True,
+"prediction": ai_prediction(),
+"anomaly": ai_anomaly(),
+}
 
-    return {
-        "success": True,
-        "prediction": ai_prediction(),
-        "anomaly": ai_anomaly(),
-    }
-
-
-# ============================================================
-
-# DELETE NETWORK HISTORY
-
-# ============================================================
+============================================================
 
 
+DELETE NETWORK HISTORY & RETENTION CONTROLS
 
+
+============================================================
+
+@app.get("/api/network-history/retention")
+def get_history_retention():
+connection = get_connection()
+try:
+cursor = connection.cursor()
+cursor.execute("SELECT retention_days FROM history_settings WHERE id = 1")
+row = cursor.fetchone()
+return {
+"status": "success",
+"retention_days": row["retention_days"] if row else None,
+}
+finally:
+connection.close()
+@app.put("/api/network-history/retention")
+def update_history_retention(payload: RetentionPolicyRequest):
+connection = get_connection()
+try:
+cursor = connection.cursor()
+cursor.execute(
+"UPDATE history_settings SET retention_days = ? WHERE id = 1",
+(payload.retention_days,),
+)
+deleted_count = apply_retention_policy(connection)
+connection.commit()
+return {
+"status": "success",
+"message": "Retention policy updated",
+"retention_days": payload.retention_days,
+"deleted_count": deleted_count,
+}
+finally:
+connection.close()
+@app.post("/api/network-history/delete-selected")
+def delete_selected_network_history(payload: DeleteSelectedRequest):
+unique_ids = sorted(set(payload.ids))
+placeholders = ",".join("?" for _ in unique_ids)
+connection = get_connection()
+try:
+cursor = connection.cursor()
+cursor.execute(
+f"DELETE FROM network_tests WHERE id IN ({placeholders})",
+unique_ids,
+)
+deleted_count = cursor.rowcount
+connection.commit()
+return {
+"status": "success",
+"message": f"Deleted {deleted_count} selected record(s)",
+"deleted_count": deleted_count,
+}
+finally:
+connection.close()
 @app.delete("/api/network-history")
-
 def delete_network_history():
+connection = get_connection()
+try:
+cursor = connection.cursor()
+cursor.execute("DELETE FROM network_tests")
+deleted_count = cursor.rowcount
+connection.commit()
+return {
+"status": "success",
+"message": "All local network history deleted",
+"deleted_count": deleted_count,
+}
+finally:
+connection.close()
+
+============================================================
 
 
-
-    connection = get_connection()
-
+RUN SERVER
 
 
-    cursor = connection.cursor()
+============================================================
 
-
-
-    cursor.execute(
-
-        "DELETE FROM network_tests"
-
-    )
-
-
-
-    connection.commit()
-
-
-
-    connection.close()
-
-
-
-
-
-    return {
-
-        "status": "success",
-
-        "message": "Network history deleted"
-
-    }
-
-
-
-
-
-# ============================================================
-
-# RUN SERVER
-
-# ============================================================
-
-
-
-if __name__ == "__main__":
-
-
-
-    import uvicorn
-
-
-
-    uvicorn.run(
-
-        "backend.main:app",
-
-        host="127.0.0.1",
-
-        port=8000,
-
-        reload=True
-
-    )
+if name == "main":
+import uvicorn
+uvicorn.run(
+"backend.main:app",
+host="127.0.0.1",
+port=8000,
+reload=True
+)
